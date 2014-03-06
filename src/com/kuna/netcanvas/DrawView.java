@@ -3,7 +3,17 @@ package com.kuna.netcanvas;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Stack;
+import java.util.TooManyListenersException;
+
 import com.kuna.netcanvas.DrawView.History;
+import com.kuna.netcanvas.brush.BrushModel;
+import com.kuna.netcanvas.brush.Brush_Bitmap;
+import com.kuna.netcanvas.brush.Brush_Normal;
+import com.kuna.netcanvas.brush.Brush_Rand;
+import com.kuna.netcanvas.brush.Brush_Round;
+import com.kuna.netcanvas.brush.EraserModel;
+import com.kuna.netcanvas.brush.Eraser_Normal;
+
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.AvoidXfermode;
@@ -35,9 +45,8 @@ import android.widget.Toast;
  * 
  * @author kuna
  * need to add - Screen rotation (UI changing)
- * 1. 부드러운 선 긋기
-3. 컬러픽 기능 지원
-4. 레이어 생긴거 제대로 되도록 고치기
+ * 
+4. 레이어 생긴거 제대로 되도록 고치기 (레이어 지원시키기)
 5. 이미지브러시 제대로 나오도록 하기 및 알고리즘 구현 (브러시 종류 일단 3가지로 만들기.)
  - http://www.tricedesigns.com/2012/01/04/sketching-with-html5-canvas-and-brush-images/
 http://stackoverflow.com/questions/16650419/draw-in-canvas-by-finger-android
@@ -52,7 +61,7 @@ public class DrawView extends View {
 	private Context c;
 	
 	// default drawing option
-	Paint mp, mp_grad, mp_texture, mp_erase;
+	Paint mp_layer;
 	Bitmap b_layer[] = new Bitmap[config.MAXLAYER];
 	Canvas c_layer[] = new Canvas[config.MAXLAYER];
 	int m_layercnt = 1;
@@ -83,6 +92,7 @@ public class DrawView extends View {
 	
 	// zoom & pos
 	float fZoom = 1;	// zoom
+	float fOrgZoom = 1;
 	PointF fPos;		// offset
 	
 	// menus
@@ -90,6 +100,7 @@ public class DrawView extends View {
 	boolean isLayer = false;
 	int selMenu = -1;
 	int selCtrl = -1;
+	int selTool = 0;	// 0: brush, 1: eraser
 	
 	// resource
 	Bitmap b_bgBtm;
@@ -105,8 +116,16 @@ public class DrawView extends View {
 	Bitmap b_sBrush;
 	Bitmap b_sTrans;
 	
+	// brush / erasers
+	BrushModel brush;
+	EraserModel eraser;
+	
 	// brush bitmap
 	Bitmap b_texture;
+	
+	// dialog
+	BrushDialog dialog_brush;
+	ColorPickerDialog dialog_color;
 	
 	// history / undo / redo
 	public class History {
@@ -157,37 +176,6 @@ public class DrawView extends View {
 		cWid = width;
 		cHei = height;
 		
-		// make new brush
-		mp = new Paint();
-		mp.setColor(m_brushClr);
-		mp.setStrokeWidth(m_brushWid);
-		mp.setAntiAlias(true);
-		mp.setAlpha(m_brushAlpha);
-		mp.setStyle(Paint.Style.STROKE);
-		mp.setStrokeJoin(Paint.Join.ROUND);    // set the join to round you want
-		mp.setStrokeCap(Paint.Cap.ROUND);      // set the paint cap to round too
-		mp.setPathEffect(new CornerPathEffect(10) );   // set the path effect when they join.
-		mp.setDither(true);
-		
-		mp_grad = new Paint();
-		mp_grad.setColor(m_brushClr);
-		mp_grad.setStyle(Paint.Style.FILL);
-		mp_grad.setAlpha(m_brushAlpha/2);
-	    // Create a radial gradient
-	    RadialGradient gradient = new android.graphics.RadialGradient(
-	    		m_brushWid/2, m_brushWid/2,
-	    		m_brushWid, 0xFFFF0000, 0x00000000,
-	            TileMode.CLAMP);
-		mp_grad.setShader(gradient);
-		mp_grad.setXfermode(new PorterDuffXfermode(Mode.DST_OUT));
-		
-		mp_texture = new Paint();
-		mp_texture.setColor(m_brushClr);
-		// removeColor is the color that will be replaced with the pain't color
-		// 0 is the tolerance (in this case, only the color to be removed is targetted)
-		// Mode.TARGET means pixels with color the same as removeColor are drawn on
-		mp_texture.setXfermode(new AvoidXfermode(m_brushClr, 0, AvoidXfermode.Mode.TARGET));
-		
 		// init draw
 		m_path = new Path();
 		
@@ -196,11 +184,12 @@ public class DrawView extends View {
 		for (int i=0; i<m_layercnt; i++) {
 			b_layer[i] = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 			c_layer[i] = new Canvas(b_layer[i]);
-			c_layer[i].drawCircle(10, 50*i, 50, mp_grad);
-			//c_layer[i].drawLine(10, 10, i*10, 100, mp);
 		}
 		bTemp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 		cTemp = new Canvas(bTemp);
+
+		// for layer alpha
+		mp_layer = new Paint();
 		
 		// make multitouch init
 		
@@ -220,6 +209,10 @@ public class DrawView extends View {
 		
 		// load bitmap brush
 		b_texture = BitmapFactory.decodeResource(getResources(), R.drawable.brush_star);
+		
+		// init dialog
+		dialog_brush = new BrushDialog(context, m_brushind);
+		dialog_color = new ColorPickerDialog(context, m_brushClr);
 	}
 
 	@Override
@@ -242,9 +235,8 @@ public class DrawView extends View {
 			canvas.drawBitmap(b_layer[i], null, r, null);
 			if (m_layerind == i) {
 				// draw temp path
-				cTemp.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-				cTemp.drawPath(m_path, mp);
-				canvas.drawBitmap(bTemp, null, r, null);
+				mp_layer.setAlpha(m_brushAlpha);
+				canvas.drawBitmap(bTemp, null, r, mp_layer);
 			}
 		}
 		
@@ -360,6 +352,8 @@ public class DrawView extends View {
 		    	if (ptCnt == 1) {
 		    		if ( f.x > wWid-100 && f.y < 80 ) {		// <more> button
 		    			isMore = !isMore;
+		    			if (isMore == false)
+		    				isLayer = false;
 		    		} else {
 		    			boolean drawingmode = true;
 		    			if (isMore) {						// need more examation...
@@ -418,13 +412,23 @@ public class DrawView extends View {
 				    		Log.i("START", Integer.toString(TouchIndex));
 				    		isStartedDrawing = 1;
 			    	    	m_p = f;
-			    	    	draw_start(f.x, f.y);
+			    	    	switch (selTool) {
+			    	    	case 0:
+				    	    	draw_start(f.x, f.y);
+			    	    		break;
+			    	    	case 1:
+				    	    	erase_start(f.x, f.y);
+			    	    		break;
+			    	    	}
 		    			}
 		    		}
 		    	} else {
 	    			if (ptCnt == 2 && isStartedDrawing == 1) {
 	    				// turn off drawing
 	    				isStartedDrawing = 0;
+	    				
+	    				// save org zoom size
+	    				fOrgZoom = fZoom;
 	    				
 	    				// get first zoomsize
 	    				fZoomLen = getDist(f, m_p);
@@ -445,7 +449,14 @@ public class DrawView extends View {
 		    case MotionEvent.ACTION_MOVE: { // a pointer was moved
 		    	if (ptCnt == 1) {	// draw only when 1 touch mode
 		    		if (isStartedDrawing == 1) {
-		    	    	draw_move(f.x, f.y);
+		    			switch (selTool) {
+		    			case 0:
+			    	    	draw_move(f.x, f.y);
+		    				break;
+		    			case 1:
+		    				erase_move(f.x, f.y);
+		    				break;
+		    			}
 		    	    	m_p = f;
 			    		invalidate();
 		    		} else {
@@ -480,7 +491,7 @@ public class DrawView extends View {
 		    	    	PointF bf = new PointF();
 		    	    	bf.x = event.getX(TouchIndex2);
 		    	    	bf.y = event.getY(TouchIndex2);
-		    			fZoom = getDist(f, bf) / fZoomLen;
+		    			fZoom = fOrgZoom * getDist(f, bf) / fZoomLen;
 			    		Log.v("ZOOM", Float.toString(fZoom));
 		    		}
 		    		invalidate();
@@ -517,11 +528,11 @@ public class DrawView extends View {
 				    		break;
 				    	case 1:		// BRUSH
 				    		Log.v("MENU", "SELECT BRUSH");
-				    		mp.setXfermode(null);
+				    		selTool = 0;
 				    		break;
 				    	case 2:		// ERASE
 				    		Log.v("MENU", "SELECT ERASE");
-				    		mp.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+				    		selTool = 1;
 				    		break;
 				    	case 3:		// COLORPICK
 				    		Log.v("MENU", "SELECT COLORPICK");
@@ -534,18 +545,24 @@ public class DrawView extends View {
 		    	}
 		    	
 		    	if (selCtrl >= 0) {
-		    		// reset brush
-		    		mp.setAlpha(m_brushAlpha);
-		    		mp.setStrokeWidth(m_brushWid);
-
 			    	// init selctrl
 			    	selCtrl = -1;
 		    	}
 		    	
 		    	if (isStartedDrawing == 1) {
-		    		draw_end();
+		    		switch (selTool) {
+		    		case 0:
+			    		draw_end(f.x, f.y);
+			    		break;
+		    		case 1:
+		    			erase_end(f.x, f.y);
+		    			break;
+		    		}
+		    		
+		    		isStartedDrawing = 0;
 		    	}
 		    	
+		    	invalidate();
 		    	break;
 		    }
 	    }
@@ -567,112 +584,73 @@ public class DrawView extends View {
 
 	
 	//
-	private float _mx, _my;			// pos memorial
-	private float _lastx, _lasty;	// texture drawing pos memorial
 	public void draw_start(float x, float y) {
-		// add canvas state to UNDO (bitmap, layernum)
-		addHistory();
-		
-		// draw path - case by case
+		// locate brush before start
 		switch (m_brushind) {
-		case 0:
-			c_layer[m_layerind].drawLine(convX(x), convY(y), convX(x), convY(y), mp);
+		case 0:		// rnd
+			brush = new Brush_Rand(cTemp);
 			break;
-		case 1:
-			m_path.reset();
-			m_path.moveTo(convX(x), convY(y));
+		case 1:		// normal
+			brush = new Brush_Normal(cTemp);
 			break;
-		case 2:	// gradient circle
-			c_layer[m_layerind].drawCircle(convX(x), convY(y), m_brushWid/2, mp_grad);
-			_lastx = x;
-			_lasty = y;
-		case 3:	// bitmap
+		case 2:		// round gradient
+			brush = new Brush_Round(cTemp);
+			break;
+		case 3:		// bitmap
+			brush = new Brush_Bitmap(cTemp, b_texture);
 			break;
 		}
 		
-		_mx = x;
-		_my = y;
+		if (brush != null) {
+			// add canvas state to UNDO (bitmap, layernum)
+			addHistory();
+			
+			// set color and width before drawing
+			brush.setColor(m_brushClr);
+			brush.setWidth(m_brushWid);
+			
+			// draw path
+			brush.draw_start(convX(x), convY(y));
+		}
 	}
 	
 	public void draw_move(float x, float y) {
-		int dist;
-		double angle;
-		float nx, ny;
-		
-		switch (m_brushind) {
-		case 0:
-			mp.setStrokeWidth(m_brushWid * (float)Math.random());
-    		c_layer[m_layerind].drawLine(convX(_mx), convY(_my), convX(x), convY(y), mp);
-    		break;
-		case 1:
-			m_path.quadTo(convX(_mx), convY(_my), convX((x+_mx)/2), convY((y+_my)/2));
-			break;
-		case 2:
-			dist = (int) Math.sqrt(Math.pow(x-_lastx, 2) + Math.pow(y-_lasty, 2));
-			angle = Math.atan2(x-_lastx, y-_lasty);
-			nx=_lastx;
-			ny=_lasty;
-			for (int i=1; i<=dist; i++) {
-				nx = (float) (_lastx + i*Math.sin(angle));
-				ny = (float) (_lasty + i*Math.cos(angle));
-				c_layer[m_layerind].drawCircle(convX(nx), convY(ny), m_brushWid/2, mp_grad);
-			}
-			_lastx = nx;
-			_lasty = ny;
-			break;
-		case 3:
-			dist = (int) Math.sqrt(Math.pow(x-_lastx, 2) + Math.pow(y-_lasty, 2));
-			angle = Math.atan2(x-_lastx, y-_lasty);
-			nx=_lastx;
-			ny=_lasty;
-			for (int i=1; i<=dist; i++) {
-				nx = (float) (_lastx + i*Math.sin(angle));
-				ny = (float) (_lasty + i*Math.cos(angle));
-				c_layer[m_layerind].drawBitmap(b_texture, null, new RectF(nx, ny, nx+m_brushWid, ny+m_brushWid), mp_texture);
-			}
-			_lastx = nx;
-			_lasty = ny;
-			break;
-		}
-		_mx = x;
-		_my = y;
+		brush.draw_move(convX(x), convY(y));
 	}
 	
-	public void draw_end() {
-		switch (m_brushind) {
-		case 0:
-			break;
-		case 1:
-			m_path.lineTo(convX(_mx), convY(_my));
-			
-			// commit path
-			c_layer[m_layerind].drawPath(m_path, mp);
-			
-			// reset path
-			m_path.reset();
-			
-			break;
-		}
+	public void draw_end(float x, float y) {
+		brush.draw_end(convX(x), convY(y));
 		
-		isStartedDrawing = 0;
+		// apply canvas layer
+		mp_layer.setAlpha(m_brushAlpha);
+		c_layer[m_layerind].drawBitmap(bTemp, 0, 0, mp_layer);
+		
+		// clean temp layer
+		cTemp.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
 	}
 	
-	public void erase_start() {
+	public void erase_start(float x, float y) {
+		addHistory();
 		
+		eraser = new Eraser_Normal(c_layer[m_layerind]);
+		eraser.setWidth(m_brushWid);
+		eraser.draw_start(convX(x), convY(y));
 	}
 	
-	public void setBrushColor(int color) {
-		// set all color of paint object
+	public void erase_move(float x, float y) {
+		eraser.draw_move(convX(x), convY(y));
+	}
+	
+	public void erase_end(float x, float y) {
+		eraser.draw_end(convX(x), convY(y));
 	}
 	
 	public void openBrushSelectDialog() {
-		BrushDialog bd = new BrushDialog(c, m_brushind);
-		bd.show();
+		dialog_brush.show();
 	}
 	
 	public void openColorDialog() {
-		ColorPickerDialog cpd = new ColorPickerDialog(c, m_brushClr, mp);
-		cpd.show();
+		dialog_color.show();
 	}
 	
 	// convert pos to draw on bitmap

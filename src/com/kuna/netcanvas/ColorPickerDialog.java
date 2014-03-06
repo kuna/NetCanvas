@@ -18,24 +18,19 @@ import android.view.View;
 
 public class ColorPickerDialog extends Dialog {
 	public static int selectColor;
-	private static Paint _paint;
 
 	private static class ColorPickerView extends View {
 		private Paint mPaint;
 		private Paint mCenterPaint;
-		private final int[] mColors;
+		private int[] mColors;
+		
 		ColorPickerView(Context c, int color) {
 			super(c);
-			mColors = new int[] {
-					0xFFFF0000, 0xFFFF00FF, 0xFF0000FF, 0xFF00FFFF, 0xFF00FF00,
-					0xFFFFFF00, 0xFFFF0000
-			};
-			Shader s = new SweepGradient(0, 0, mColors, null);
 
 			mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-			mPaint.setShader(s);
 			mPaint.setStyle(Paint.Style.STROKE);
 			mPaint.setStrokeWidth(32);
+			createShader();
 
 			mCenterPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 			mCenterPaint.setColor(color);
@@ -48,6 +43,8 @@ public class ColorPickerDialog extends Dialog {
 		private int mTrackingMode = -1;
 		private float saturation = 1;
 		private float brightness = 1;
+		
+		private float angle;
 
 		@Override
 		protected void onDraw(Canvas canvas) {
@@ -56,6 +53,7 @@ public class ColorPickerDialog extends Dialog {
 			canvas.save();
 			canvas.translate(CENTER_X, CENTER_X);
 
+			createShader();
 			canvas.drawOval(new RectF(-r, -r, r, r), mPaint);
 			canvas.drawCircle(0, 0, CENTER_RADIUS, mCenterPaint);
 
@@ -140,14 +138,30 @@ public class ColorPickerDialog extends Dialog {
 			int r = ave(Color.red(c0), Color.red(c1), p);
 			int g = ave(Color.green(c0), Color.green(c1), p);
 			int b = ave(Color.blue(c0), Color.blue(c1), p);
-
-			// set saturation
-			int gr = (r+g+b)/3;
-			int rn = (int)(r*saturation + gr*(1-saturation));
-			int gn = (int)(g*saturation + gr*(1-saturation));
-			int bn = (int)(b*saturation + gr*(1-saturation));
 			
-			return Color.argb(a, (int)(rn*brightness), (int)(gn*brightness), (int)(bn*brightness));
+			return Color.argb(a, r, g, b);
+		}
+		
+		private int getCalculatedColor(int a, int r, int g, int b, float sat, float bright) {
+			int gr = (int) (bright*255);
+			int rn = (int)(r*sat + gr*(1-sat));
+			int gn = (int)(g*sat + gr*(1-sat));
+			int bn = (int)(b*sat + gr*(1-sat));
+			return Color.argb(a, (int)(rn*bright), (int)(gn*bright), (int)(bn*bright));
+		}
+		
+		private void createShader() {
+			mColors = new int[] {
+					getCalculatedColor(255, 255, 0, 0, saturation, brightness),
+					getCalculatedColor(255, 255, 0, 255, saturation, brightness),
+					getCalculatedColor(255, 0, 0, 255, saturation, brightness), 
+					getCalculatedColor(255, 0, 255, 255, saturation, brightness), 
+					getCalculatedColor(255, 0, 255, 0, saturation, brightness),
+					getCalculatedColor(255, 255, 255, 0, saturation, brightness),
+					getCalculatedColor(255, 255, 0, 0, saturation, brightness)
+			};
+			Shader s = new SweepGradient(0, 0, mColors, null);
+			mPaint.setShader(s);
 		}
 
 		private int rotateColor(int color, float rad) {
@@ -222,9 +236,11 @@ public class ColorPickerDialog extends Dialog {
 						}
 					}
 					
-					float angle = (float)java.lang.Math.atan2(y, x);
+					if (px < CENTER_X*2)
+						angle = (float)java.lang.Math.atan2(y, x);
+					
 					// need to turn angle [-PI ... PI] into unit [0....1]
-							float unit = angle/(2*PI);
+					float unit = angle/(2*PI);
 					if (unit < 0) {
 						unit += 1;
 					}
@@ -234,15 +250,11 @@ public class ColorPickerDialog extends Dialog {
 				break;
 			case MotionEvent.ACTION_UP:
 				if (mTrackingCenter) {
-					if (inCenter) {
-						DrawView.m_brushClr = mCenterPaint.getColor();
-						_paint.setColor(DrawView.m_brushClr);
-					}
+					DrawView.m_brushClr = mCenterPaint.getColor();
 					mTrackingCenter = false;    // so we draw w/o halo
 					invalidate();
 				} else if (mTrackingMode >= 0) {
 					DrawView.m_brushClr = mCenterPaint.getColor();
-					_paint.setColor(DrawView.m_brushClr);
 					mTrackingMode = -1;			// reset mode
 				}
 				break;
@@ -252,11 +264,10 @@ public class ColorPickerDialog extends Dialog {
 	}
 
 	public ColorPickerDialog(Context context,
-			int initialColor, Paint _p) {
+			int initialColor) {
 		super(context);
 
 		selectColor = initialColor;
-		_paint = _p;
 	}
 
 	@Override
