@@ -3,9 +3,8 @@ package com.kuna.netcanvas;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Stack;
-
 import com.kuna.netcanvas.DrawView.History;
-
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.AvoidXfermode;
 import android.graphics.Bitmap;
@@ -23,6 +22,7 @@ import android.graphics.RadialGradient;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader.TileMode;
+import android.os.Build;
 import android.util.Log;
 import android.util.SparseArray;
 import android.view.Display;
@@ -44,6 +44,7 @@ http://stackoverflow.com/questions/16650419/draw-in-canvas-by-finger-android
 http://perfectionkills.com/exploring-canvas-drawing-techniques/
  *
  */
+@TargetApi(Build.VERSION_CODES.GINGERBREAD)
 public class DrawView extends View {
 	// default
 	int wHei, wWid;
@@ -51,7 +52,7 @@ public class DrawView extends View {
 	private Context c;
 	
 	// default drawing option
-	Paint mp, mp_grad, mp_texture;
+	Paint mp, mp_grad, mp_texture, mp_erase;
 	Bitmap b_layer[] = new Bitmap[config.MAXLAYER];
 	Canvas c_layer[] = new Canvas[config.MAXLAYER];
 	int m_layercnt = 1;
@@ -116,6 +117,8 @@ public class DrawView extends View {
 			if (b_layer[layerNum] != null) {
 				b_layer[layerNum].recycle();
 				b_layer[layerNum] = layerData.copy(Bitmap.Config.ARGB_8888, true);
+				c_layer[layerNum] = new Canvas(b_layer[layerNum]);
+				m_layerind = layerNum;
 			}
 		}
 		
@@ -125,8 +128,8 @@ public class DrawView extends View {
 			}
 		}
 	}
-	Queue<History> q_history = new LinkedList<History>();
-	Queue<History> q_redo = new LinkedList<History>();
+	LinkedList<History> q_history = new LinkedList<History>();
+	LinkedList<History> q_redo = new LinkedList<History>();
 	
 	public DrawView(Context context, int width, int height, int layers) {
 		super(context);
@@ -173,7 +176,7 @@ public class DrawView extends View {
 	    // Create a radial gradient
 	    RadialGradient gradient = new android.graphics.RadialGradient(
 	    		m_brushWid/2, m_brushWid/2,
-	    		m_brushWid, 0xFF000000, 0x00000000,
+	    		m_brushWid, 0xFFFF0000, 0x00000000,
 	            TileMode.CLAMP);
 		mp_grad.setShader(gradient);
 		mp_grad.setXfermode(new PorterDuffXfermode(Mode.DST_OUT));
@@ -193,7 +196,8 @@ public class DrawView extends View {
 		for (int i=0; i<m_layercnt; i++) {
 			b_layer[i] = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 			c_layer[i] = new Canvas(b_layer[i]);
-			c_layer[i].drawLine(10, 10, i*10, 100, mp);
+			c_layer[i].drawCircle(10, 50*i, 50, mp_grad);
+			//c_layer[i].drawLine(10, 10, i*10, 100, mp);
 		}
 		bTemp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 		cTemp = new Canvas(bTemp);
@@ -491,6 +495,7 @@ public class DrawView extends View {
 		    			// open custom menu
 				    	switch (selMenu) {
 				    	case 0:		// UNDO
+				    		doRedo();
 				    		break;
 				    	case 1:		// BRUSH
 				    		Log.v("DIALOG", "BRUSH DLG");
@@ -508,6 +513,7 @@ public class DrawView extends View {
 				    	switch (selMenu) {
 				    	case 0:		// UNDO
 				    		Log.v("MENU", "SELECT UNDO");
+				    		doUndo();
 				    		break;
 				    	case 1:		// BRUSH
 				    		Log.v("MENU", "SELECT BRUSH");
@@ -574,10 +580,10 @@ public class DrawView extends View {
 			break;
 		case 1:
 			m_path.reset();
-			m_path.moveTo(convX(x), convX(y));
+			m_path.moveTo(convX(x), convY(y));
 			break;
 		case 2:	// gradient circle
-			c_layer[m_layerind].drawCircle(x, y, m_brushWid/2, mp_grad);
+			c_layer[m_layerind].drawCircle(convX(x), convY(y), m_brushWid/2, mp_grad);
 			_lastx = x;
 			_lasty = y;
 		case 3:	// bitmap
@@ -599,7 +605,7 @@ public class DrawView extends View {
     		c_layer[m_layerind].drawLine(convX(_mx), convY(_my), convX(x), convY(y), mp);
     		break;
 		case 1:
-			m_path.quadTo(convX(_mx), convX(_my), convX((x+_mx)/2), convX((y+_my)/2));
+			m_path.quadTo(convX(_mx), convY(_my), convX((x+_mx)/2), convY((y+_my)/2));
 			break;
 		case 2:
 			dist = (int) Math.sqrt(Math.pow(x-_lastx, 2) + Math.pow(y-_lasty, 2));
@@ -609,7 +615,7 @@ public class DrawView extends View {
 			for (int i=1; i<=dist; i++) {
 				nx = (float) (_lastx + i*Math.sin(angle));
 				ny = (float) (_lasty + i*Math.cos(angle));
-				c_layer[m_layerind].drawCircle(nx, ny, m_brushWid/2, mp_grad);
+				c_layer[m_layerind].drawCircle(convX(nx), convY(ny), m_brushWid/2, mp_grad);
 			}
 			_lastx = nx;
 			_lasty = ny;
@@ -637,7 +643,7 @@ public class DrawView extends View {
 		case 0:
 			break;
 		case 1:
-			m_path.lineTo(convX(_mx), convX(_my));
+			m_path.lineTo(convX(_mx), convY(_my));
 			
 			// commit path
 			c_layer[m_layerind].drawPath(m_path, mp);
@@ -649,6 +655,10 @@ public class DrawView extends View {
 		}
 		
 		isStartedDrawing = 0;
+	}
+	
+	public void erase_start() {
+		
 	}
 	
 	public void setBrushColor(int color) {
@@ -683,33 +693,31 @@ public class DrawView extends View {
 	}
 	
 	public void addHistory() {
-		if (q_history.size() >= config.MAXHISTORY) q_history.poll();
+		if (q_history.size() >= config.MAXHISTORY) q_history.pollLast();
 		if (q_redo.size() > 0) q_redo.clear();
 		History h = new History();
 		h.layerNum = m_layerind;
 		h.layerData = b_layer[m_layerind].copy(Bitmap.Config.ARGB_8888, true);
-		q_history.offer(h);
+		q_history.push(h);
 	}
 	
 	public void doUndo() {
-		Stack<History> sHistory = (Stack<History>) q_history;
-		Stack<History> sRedo = (Stack<History>) q_redo;
-		
 		if (q_history.size() > 0) {
-			History h = sHistory.pop();
+			History h = q_history.pop();
 			h.applyHistory();
-			sRedo.push(h);
+			q_redo.push(h);
 		}
+		
+		invalidate();
 	}
 	
 	public void doRedo() {
-		Stack<History> sHistory = (Stack<History>) q_history;
-		Stack<History> sRedo = (Stack<History>) q_redo;
-		
 		if (q_redo.size() > 0) {
-			History h = sRedo.pop();
+			History h = q_redo.pop();
 			h.applyHistory();
-			sHistory.push(h);
+			q_history.push(h);
 		}
+		
+		invalidate();
 	}
 }
